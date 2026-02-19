@@ -18,8 +18,8 @@
     <div class="hud">
       <h1>Демо: варианты дивана + клик по объекту</h1>
       <p class="hint">
-        Названия в модели: <code>Sofa_1</code>, <code>Sofa_2</code>,
-        (или <code>Chair_V1/V2</code>).
+        Названия в модели: <code>Chair_1</code>, <code>Chair_2</code>
+        (поддерживается и <code>Sofa_1</code>, <code>Sofa_2</code>).
       </p>
       <div class="levels" id="levels">
         <button class="level-btn is-active" data-level="1">Уровень 1</button>
@@ -31,8 +31,57 @@
     <aside class="popup hidden" id="popup" aria-live="polite">
       <h2 id="popup-title">Объект</h2>
       <p id="popup-text"></p>
-      <button id="popup-close" type="button">Закрыть</button>
+      <div class="popup-actions">
+        <button class="popup-start" id="popup-start-game" type="button">Запустить мини-игру</button>
+        <button id="popup-close" type="button">Закрыть</button>
+      </div>
     </aside>
+
+    <section class="minigame hidden" id="minigame" aria-live="polite">
+      <div class="minigame-backdrop"></div>
+      <div class="minigame-shell">
+        <header class="minigame-header">
+          <div>
+            <p class="minigame-kicker">Мини-игра</p>
+            <h2 id="minigame-title">Регистрация бизнеса</h2>
+          </div>
+          <div class="timer-wrap">
+            <span class="timer-label">Осталось</span>
+            <span class="timer-value" id="minigame-timer">00:00</span>
+          </div>
+        </header>
+
+        <p class="minigame-lead" id="minigame-lead">
+          Перетащите документы на правильные позиции до окончания таймера.
+        </p>
+
+        <div class="timer-bar">
+          <div class="timer-bar-fill" id="minigame-timer-fill"></div>
+        </div>
+
+        <div class="minigame-board" id="minigame-board">
+          <section class="cards-bank">
+            <h3>Документы</h3>
+            <div class="cards-grid" id="minigame-cards"></div>
+          </section>
+
+          <section class="desk-area">
+            <h3>Стол бухгалтера</h3>
+            <div class="slots-grid" id="minigame-slots"></div>
+          </section>
+        </div>
+
+        <div class="minigame-result hidden" id="minigame-result">
+          <h3 id="minigame-result-title">Результат</h3>
+          <p id="minigame-result-text"></p>
+        </div>
+
+        <footer class="minigame-actions">
+          <button class="ghost-btn" id="minigame-close" type="button">Закрыть</button>
+          <button class="primary-btn" id="minigame-retry" type="button">Повторить</button>
+        </footer>
+      </div>
+    </section>
 
     <canvas class="webgl" id="webgl"></canvas>
 

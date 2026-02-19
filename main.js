@@ -11,6 +11,27 @@ const popupEl = document.getElementById("popup");
 const popupTitleEl = document.getElementById("popup-title");
 const popupTextEl = document.getElementById("popup-text");
 const popupCloseEl = document.getElementById("popup-close");
+const popupStartGameEl = document.getElementById("popup-start-game");
+const miniGameEl = document.getElementById("minigame");
+const miniGameTitleEl = document.getElementById("minigame-title");
+const miniGameLeadEl = document.getElementById("minigame-lead");
+const miniGameBoardEl = document.getElementById("minigame-board");
+const miniGameCardsEl = document.getElementById("minigame-cards");
+const miniGameSlotsEl = document.getElementById("minigame-slots");
+const miniGameTimerEl = document.getElementById("minigame-timer");
+const miniGameTimerFillEl = document.getElementById("minigame-timer-fill");
+const miniGameResultEl = document.getElementById("minigame-result");
+const miniGameResultTitleEl = document.getElementById("minigame-result-title");
+const miniGameResultTextEl = document.getElementById("minigame-result-text");
+const miniGameCloseEl = document.getElementById("minigame-close");
+const miniGameRetryEl = document.getElementById("minigame-retry");
+
+const MINIGAME_DOCS = {
+  inn: { label: "ИНН", note: "Налоговая карточка", color: "#f0d98d" },
+  contract: { label: "Договор", note: "Основной пакет", color: "#9dd7f9" },
+  stamp: { label: "Печать", note: "Подтверждение", color: "#f3b0bc" },
+  sign: { label: "Подпись", note: "Финальная проверка", color: "#b8e5a0" },
+};
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa59d90);
@@ -102,6 +123,17 @@ const state = {
   clickableMeshes: [],
   hoveredRoot: null,
   activeVariant: 1,
+  selectedSofaRoot: null,
+  miniGame: {
+    isOpen: false,
+    selectedDocId: null,
+    filledSlots: new Map(),
+    config: null,
+    timerStartedAt: 0,
+    timerDurationMs: 0,
+    timerIntervalId: null,
+    activeRootName: "",
+  },
 };
 
 const hoverBox = new THREE.BoxHelper(undefined, 0xf0b54a);
@@ -110,6 +142,272 @@ scene.add(hoverBox);
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+function formatSeconds(totalMs) {
+  const totalSec = Math.max(0, Math.ceil(totalMs / 1000));
+  const mm = Math.floor(totalSec / 60)
+    .toString()
+    .padStart(2, "0");
+  const ss = (totalSec % 60).toString().padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function shuffleArray(input) {
+  const array = [...input];
+  for (let i = array.length - 1; i > 0; i -= 1) {
+    const randomIndex = Math.floor(Math.random() * (i + 1));
+    [array[i], array[randomIndex]] = [array[randomIndex], array[i]];
+  }
+  return array;
+}
+
+function getMiniGameConfig() {
+  if (state.activeVariant === 2) {
+    return {
+      title: "Регистрация бизнеса: Упрощенный процесс",
+      lead: "С банковым продуктом часть проверки автоматизирована. Разложите 3 документа до таймера.",
+      timeLimitSec: 18,
+      slots: [
+        { id: "slot-1", label: "Проверка клиента", docId: "inn" },
+        { id: "slot-2", label: "Договор в архив", docId: "contract" },
+        { id: "slot-3", label: "Подтверждение", docId: "stamp" },
+      ],
+    };
+  }
+
+  return {
+    title: "Регистрация бизнеса: Ручной режим",
+    lead: "Перетащите документы в правильные зоны стола бухгалтера до окончания времени.",
+    timeLimitSec: 24,
+    slots: [
+      { id: "slot-1", label: "Проверка клиента", docId: "inn" },
+      { id: "slot-2", label: "Договор в архив", docId: "contract" },
+      { id: "slot-3", label: "Подтверждение", docId: "stamp" },
+      { id: "slot-4", label: "Подпись руководителя", docId: "sign" },
+    ],
+  };
+}
+
+function setMiniGameDocSelection(docId) {
+  state.miniGame.selectedDocId = docId;
+  miniGameCardsEl.querySelectorAll(".doc-card").forEach((card) => {
+    const selected = card.dataset.docId === docId;
+    card.classList.toggle("is-selected", selected);
+  });
+}
+
+function createDocCard(docId) {
+  const doc = MINIGAME_DOCS[docId];
+  const card = document.createElement("article");
+  card.className = "doc-card";
+  card.draggable = true;
+  card.dataset.docId = docId;
+  card.style.background = `linear-gradient(145deg, ${doc.color}, #f7efe0)`;
+  card.innerHTML = `<span class="doc-title">${doc.label}</span><span class="doc-note">${doc.note}</span>`;
+
+  card.addEventListener("dragstart", (event) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", docId);
+    card.classList.add("dragging");
+  });
+  card.addEventListener("dragend", () => {
+    card.classList.remove("dragging");
+  });
+  card.addEventListener("click", () => {
+    if (card.classList.contains("is-placed")) {
+      return;
+    }
+    setMiniGameDocSelection(docId);
+  });
+
+  return card;
+}
+
+function markSlotWrong(slotEl) {
+  slotEl.classList.add("is-wrong");
+  window.setTimeout(() => {
+    slotEl.classList.remove("is-wrong");
+  }, 240);
+}
+
+function tryPlaceDoc(slotEl, docId) {
+  if (!slotEl || !docId || slotEl.dataset.locked === "true") {
+    return;
+  }
+
+  const expectedDocId = slotEl.dataset.accept;
+  if (docId !== expectedDocId) {
+    markSlotWrong(slotEl);
+    return;
+  }
+
+  const card = miniGameCardsEl.querySelector(`.doc-card[data-doc-id="${docId}"]`);
+  if (!card || card.classList.contains("is-placed")) {
+    return;
+  }
+
+  card.classList.add("is-placed");
+  card.classList.remove("is-selected");
+  card.draggable = false;
+  slotEl.dataset.locked = "true";
+  slotEl.classList.add("is-correct");
+  slotEl.append(card);
+
+  state.miniGame.filledSlots.set(slotEl.dataset.slotId, docId);
+  state.miniGame.selectedDocId = null;
+
+  if (state.miniGame.filledSlots.size === state.miniGame.config.slots.length) {
+    finishMiniGame(true);
+  }
+}
+
+function createDocSlot(slotConfig) {
+  const slotEl = document.createElement("article");
+  slotEl.className = "doc-slot";
+  slotEl.dataset.slotId = slotConfig.id;
+  slotEl.dataset.accept = slotConfig.docId;
+  slotEl.innerHTML = `<div class="slot-title">${slotConfig.label}</div>`;
+
+  slotEl.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    if (slotEl.dataset.locked !== "true") {
+      slotEl.classList.add("is-hovered");
+    }
+  });
+  slotEl.addEventListener("dragleave", () => {
+    slotEl.classList.remove("is-hovered");
+  });
+  slotEl.addEventListener("drop", (event) => {
+    event.preventDefault();
+    slotEl.classList.remove("is-hovered");
+    const docId = event.dataTransfer.getData("text/plain");
+    tryPlaceDoc(slotEl, docId);
+  });
+  slotEl.addEventListener("click", () => {
+    if (!state.miniGame.selectedDocId) {
+      return;
+    }
+    tryPlaceDoc(slotEl, state.miniGame.selectedDocId);
+  });
+
+  return slotEl;
+}
+
+function updateMiniGameTimer() {
+  const elapsed = Date.now() - state.miniGame.timerStartedAt;
+  const remainingMs = Math.max(0, state.miniGame.timerDurationMs - elapsed);
+  const progress = Math.max(0, remainingMs / state.miniGame.timerDurationMs);
+  miniGameTimerEl.textContent = formatSeconds(remainingMs);
+  miniGameTimerFillEl.style.width = `${progress * 100}%`;
+
+  if (remainingMs === 0) {
+    finishMiniGame(false);
+  }
+}
+
+function startMiniGameTimer() {
+  if (state.miniGame.timerIntervalId) {
+    window.clearInterval(state.miniGame.timerIntervalId);
+  }
+
+  state.miniGame.timerStartedAt = Date.now();
+  state.miniGame.timerDurationMs = state.miniGame.config.timeLimitSec * 1000;
+  updateMiniGameTimer();
+  state.miniGame.timerIntervalId = window.setInterval(updateMiniGameTimer, 120);
+}
+
+function renderMiniGameBoard() {
+  const config = state.miniGame.config;
+  const randomizedDocIds = shuffleArray(config.slots.map((slot) => slot.docId));
+
+  miniGameCardsEl.innerHTML = "";
+  miniGameSlotsEl.innerHTML = "";
+  randomizedDocIds.forEach((docId) => {
+    miniGameCardsEl.append(createDocCard(docId));
+  });
+  config.slots.forEach((slotConfig) => {
+    miniGameSlotsEl.append(createDocSlot(slotConfig));
+  });
+}
+
+function finishMiniGame(success) {
+  if (state.miniGame.timerIntervalId) {
+    window.clearInterval(state.miniGame.timerIntervalId);
+    state.miniGame.timerIntervalId = null;
+  }
+  miniGameBoardEl.classList.remove("is-playing");
+
+  const config = state.miniGame.config;
+  miniGameResultEl.classList.remove("hidden");
+  if (success) {
+    miniGameResultTitleEl.textContent = "Готово: документы приняты";
+    miniGameResultTextEl.textContent =
+      "Отлично. Операция завершена быстрее, репутация бизнеса выросла.";
+    setStatus(`Мини-игра завершена успешно (${config.slots.length}/${config.slots.length}).`);
+  } else {
+    miniGameResultTitleEl.textContent = "Время вышло";
+    miniGameResultTextEl.textContent =
+      "Клиент устал ждать. Повтори раунд, чтобы не терять репутацию бизнеса.";
+    setStatus("Мини-игра не пройдена: время вышло.");
+  }
+
+  miniGameSlotsEl.querySelectorAll(".doc-slot").forEach((slot) => {
+    slot.dataset.locked = "true";
+  });
+  miniGameCardsEl.querySelectorAll(".doc-card").forEach((card) => {
+    card.draggable = false;
+  });
+}
+
+function openMiniGame(root) {
+  if (!root) {
+    return;
+  }
+  state.miniGame.isOpen = true;
+  state.miniGame.selectedDocId = null;
+  state.miniGame.filledSlots.clear();
+  state.miniGame.config = getMiniGameConfig();
+  state.miniGame.activeRootName = root?.name || "Sofa";
+
+  miniGameTitleEl.textContent = state.miniGame.config.title;
+  miniGameLeadEl.textContent = `${state.miniGame.config.lead} Объект: ${state.miniGame.activeRootName}.`;
+  miniGameResultEl.classList.add("hidden");
+  miniGameEl.classList.remove("hidden");
+  miniGameBoardEl.classList.add("is-playing");
+  hidePopup();
+
+  controls.enabled = false;
+  setHoveredRoot(null);
+
+  renderMiniGameBoard();
+  startMiniGameTimer();
+}
+
+function closeMiniGame() {
+  if (state.miniGame.timerIntervalId) {
+    window.clearInterval(state.miniGame.timerIntervalId);
+    state.miniGame.timerIntervalId = null;
+  }
+  state.miniGame.isOpen = false;
+  state.miniGame.selectedDocId = null;
+  state.miniGame.filledSlots.clear();
+  miniGameEl.classList.add("hidden");
+  miniGameBoardEl.classList.remove("is-playing");
+  controls.enabled = true;
+  setActiveVariant(state.activeVariant);
+}
+
+function restartMiniGame() {
+  if (!state.miniGame.isOpen) {
+    return;
+  }
+  state.miniGame.selectedDocId = null;
+  state.miniGame.filledSlots.clear();
+  miniGameResultEl.classList.add("hidden");
+  miniGameBoardEl.classList.add("is-playing");
+  renderMiniGameBoard();
+  startMiniGameTimer();
 }
 
 function centerOrbitOnObject(root) {
@@ -134,11 +432,11 @@ function centerOrbitOnObject(root) {
 
 function parseChairVariant(name) {
   const lower = String(name || "").toLowerCase();
-  if (!lower.includes("chair")) {
+  if (!lower.includes("chair") && !lower.includes("sofa")) {
     return null;
   }
 
-  const match = lower.match(/chair[\s_-]*(?:v|variant|level|lvl)?[\s_-]*(\d+)/i);
+  const match = lower.match(/(?:chair|sofa)[\s_-]*(?:v|variant|level|lvl)?[\s_-]*(\d+)/i);
   if (!match) {
     return null;
   }
@@ -251,9 +549,10 @@ function pickChairRoot(clientX, clientY) {
 }
 
 function showPopup(root) {
+  state.selectedSofaRoot = root;
   const variant = root.userData.chairVariant;
   popupTitleEl.textContent = `Диван уровня ${variant}`;
-  popupTextEl.textContent = `Клик по объекту "${root.name}". Здесь можно открыть попап с оффером банковского продукта или действием "Купить".`;
+  popupTextEl.textContent = `Объект "${root.name}" выбран. Нажмите "Запустить мини-игру", чтобы показать игровой сценарий с таймером и результатом.`;
   popupEl.classList.remove("hidden");
 }
 
@@ -413,6 +712,9 @@ levelsEl.addEventListener("click", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (state.miniGame.isOpen) {
+    return;
+  }
   const root = pickChairRoot(event.clientX, event.clientY);
   setHoveredRoot(root);
 });
@@ -422,6 +724,9 @@ canvas.addEventListener("pointerleave", () => {
 });
 
 canvas.addEventListener("click", (event) => {
+  if (state.miniGame.isOpen) {
+    return;
+  }
   const root = pickChairRoot(event.clientX, event.clientY);
   if (!root) {
     hidePopup();
@@ -432,6 +737,30 @@ canvas.addEventListener("click", (event) => {
 
 popupCloseEl.addEventListener("click", () => {
   hidePopup();
+});
+
+popupStartGameEl.addEventListener("click", () => {
+  openMiniGame(state.selectedSofaRoot);
+});
+
+miniGameCloseEl.addEventListener("click", () => {
+  closeMiniGame();
+});
+
+miniGameRetryEl.addEventListener("click", () => {
+  restartMiniGame();
+});
+
+miniGameEl.addEventListener("click", (event) => {
+  if (event.target.classList.contains("minigame-backdrop")) {
+    closeMiniGame();
+  }
+});
+
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.miniGame.isOpen) {
+    closeMiniGame();
+  }
 });
 
 window.addEventListener("resize", () => {
